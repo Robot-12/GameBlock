@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Ułóż Kwadraty - Płynne Przesuwanie + Skalowanie</title>
+  <style>
+    /* Styl przyjazny dzieciom, pastelowe kolory */
+    body {
+      margin: 0;
+      padding: 20px;
+      background-color: #fffbf2; /* jasne tło */
+      font-family: "Comic Sans MS", "Chalkboard SE", cursive;
+    }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: linear-gradient(135deg, #ff9a9e, #fad0c4);
+      padding: 20px;
+      border-radius: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    h1, p {
+      text-align: center;
+      color: #333;
+      margin: 10px 0;
+    }
+
+    /* Kontener główny (gry) */
+    .squares-container {
+      position: relative; /* ważne do absolutnego pozycjonowania dzieci w głównym rzędzie */
+      width: 100%;
+      height: 80px; /* wystarczające na nasze kwadraty */
+      margin: 10px 0;
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      background: #fffbea;
+      overflow: hidden; /* by kwadrat nie „wypadał” wizualnie */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Kwadraty w głównym rzędzie – absolutne pozycjonowanie, transition na transform */
+    .square {
+      position: absolute;
+      width: 60px;
+      height: 60px;
+      border: 3px solid #333;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    }
+    /* Podczas przeciągania – dodaj skalowanie */
+    .square.dragging {
+      border-color: #ff3b2f;
+      transform: scale(1.1);
+    }
+
+    /* Kontener na podpowiedzi (5 stałych, białych pól) */
+    #hint-container {
+      display: none; /* na starcie ukryty */
+      width: 100%;
+      height: 80px; 
+      border: 2px dashed #ccc;
+      border-radius: 10px;
+      background: #fffbea;
+      overflow: hidden;
+      align-items: center;
+      justify-content: center;
+    }
+    /* Każdy z 5 kwadratów w podpowiedzi – domyślnie biały, marginesy w sumie dają 10px odstępu */
+    .hint-square {
+      width: 60px;
+      height: 60px;
+      border: 3px dashed #777;
+      border-radius: 10px;
+      margin: 0 5px; /* 5px z lewej i 5px z prawej => 10px między dwoma sąsiadami */
+      transition: opacity 0.3s ease;
+      background-color: white; /* domyślnie biały */
+      opacity: 1;
+    }
+
+    /* Ekran końcowy */
+    #final-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0,0,0,0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    #final-screen .final-content {
+      background: #fff;
+      padding: 20px 30px;
+      border-radius: 15px;
+      text-align: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      background: #ff6f61;
+      color: #fff;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-top: 15px;
+    }
+    button:hover {
+      background: #ff3b2f;
+    }
+
+    /* Responsywność na mniejszych ekranach */
+    @media (max-width: 600px) {
+      .square, .hint-square {
+        width: 50px;
+        height: 50px;
+      }
+      .squares-container {
+        height: 70px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Ułóż Kwadraty!</h1>
+    <p>Przeciągnij i puść kwadraty na właściwe miejsca. Spójrz na podpowiedź!</p>
+
+    <!-- Kontener na podpowiedzi (5 stałych kwadratów) -->
+    <div id="hint-container" class="squares-container">
+      <!-- Kwadraty utworzymy w initHintSquares() -->
+    </div>
+
+    <!-- Kontener na kwadraty do przeciągania -->
+    <div id="draggable-container" class="squares-container" style="display: block;"></div>
+  </div>
+
+  <!-- Ekran końcowy -->
+  <div id="final-screen">
+    <div class="final-content">
+      <h2>Hurra, wygrałeś!</h2>
+      <p id="final-stats"></p>
+      <button id="restart-button">Zagraj ponownie</button>
+    </div>
+  </div>
+
+  <script>
+    /* ============================================
+       Ustawienia
+       ============================================ */
+    const SQUARE_SIZE = 60;    // szer/wys kwadratów w głównym rzędzie
+    const SQUARE_MARGIN = 10;  // odstęp między kwadratami w głównym rzędzie (będzie to 10px)
+    
+    // Kolory i kolejność docelowa
+    const colors = ["red", "blue", "green", "yellow", "purple"];
+    const targetOrder = colors.slice(); // poprawna kolejność
+
+    // Reprezentacja głównego rzędu kwadratów
+    // squares = [ { color, element, x }, ... ]
+    let squares = [];
+
+    let isDragging = false;
+    let draggedIndex = -1;
+    let dragCount = 0;
+    let startTime = 0;
+    let hintPermanentlyVisible = false;
+
+    // Referencje do elementów DOM
+    const draggableContainer = document.getElementById("draggable-container");
+    const hintContainer = document.getElementById("hint-container");
+    const finalScreen = document.getElementById("final-screen");
+    const finalStats = document.getElementById("final-stats");
+    const restartButton = document.getElementById("restart-button");
+
+    /* ============================================
+       Inicjalizacja
+       ============================================ */
+    function initGame() {
+      // Czyścimy kontenery
+      draggableContainer.innerHTML = "";
+      hintContainer.innerHTML = "";
+      hintContainer.style.display = "none";
+      squares = [];
+      hintPermanentlyVisible = false;
+      dragCount = 0;
+      startTime = Date.now();
+
+      // Losujemy układ inny niż docelowy
+      let shuffled;
+      do {
+        shuffled = colors.slice().sort(() => Math.random() - 0.5);
+      } while (shuffled.join() === targetOrder.join());
+
+      // Tworzymy elementy w głównym rzędzie
+      shuffled.forEach((color) => {
+        const div = document.createElement("div");
+        div.classList.add("square");
+        div.style.backgroundColor = color;
+        div.dataset.color = color;
+        draggableContainer.appendChild(div);
+
+        squares.push({
+          color,
+          element: div,
+          x: 0
+        });
+      });
+
+      // Tworzymy 5 kwadratów w wierszu podpowiedzi (domyślnie białych)
+      initHintSquares();
+
+      layoutSquares();
+      addPointerEvents();
+    }
+
+    // Tworzymy 5 kwadratów w wierszu podpowiedzi (domyślnie białych)
+    function initHintSquares() {
+      for (let i = 0; i < targetOrder.length; i++) {
+        const hsq = document.createElement("div");
+        hsq.classList.add("hint-square");
+        // domyślnie backgroundColor = white (zdefiniowane w CSS)
+        hintContainer.appendChild(hsq);
+      }
+    }
+
+    /* ============================================
+       Wyśrodkowanie głównego rzędu
+       ============================================ */
+    function layoutSquares() {
+      const containerWidth = draggableContainer.offsetWidth;
+      const count = squares.length;
+      // Łączna szerokość: liczba kwadratów * SQUARE_SIZE + (count - 1) * SQUARE_MARGIN
+      const totalWidth = count * SQUARE_SIZE + (count - 1) * SQUARE_MARGIN;
+      const startX = (containerWidth - totalWidth) / 2;
+      
+      squares.forEach((sq, i) => {
+        const x = startX + i * (SQUARE_SIZE + SQUARE_MARGIN);
+        sq.x = x;
+        sq.element.style.transform = `translateX(${x}px)`;
+      });
+    }
+
+    /* ============================================
+       Obsługa przeciągania (pointer events)
+       ============================================ */
+    function addPointerEvents() {
+      squares.forEach((sq) => {
+        sq.element.addEventListener("pointerdown", pointerDown);
+      });
+    }
+
+    function pointerDown(e) {
+      // Reagujemy tylko na lewy przycisk myszy (lub dotyk)
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      isDragging = true;
+      // Szukamy indeksu w tablicy squares
+      draggedIndex = squares.findIndex(sq => sq.element === e.currentTarget);
+      dragCount++;
+
+      const el = squares[draggedIndex].element;
+      el.classList.add("dragging");
+      el.setPointerCapture(e.pointerId);
+
+      document.addEventListener("pointermove", pointerMove);
+      document.addEventListener("pointerup", pointerUp);
+    }
+
+    function pointerMove(e) {
+      if (!isDragging) return;
+      const el = squares[draggedIndex].element;
+      const containerRect = draggableContainer.getBoundingClientRect();
+
+      let newX = e.clientX - containerRect.left - (SQUARE_SIZE / 2);
+      // Blokada, by nie wyjechać poza kontener
+      newX = Math.max(0, Math.min(newX, containerRect.width - SQUARE_SIZE));
+      el.style.transform = `translateX(${newX}px)`;
+
+      // Obliczamy, w którym miejscu w tablicy squares powinien być przeciągany element
+      let newIndex = 0;
+      for (let i = 0; i < squares.length; i++) {
+        if (i === draggedIndex) continue;
+        const center = squares[i].x + SQUARE_SIZE / 2;
+        if (newX + SQUARE_SIZE / 2 > center) {
+          newIndex++;
+        }
+      }
+
+      // Jeśli trzeba, przenosimy obiekt w tablicy
+      if (newIndex !== draggedIndex) {
+        const movedItem = squares.splice(draggedIndex, 1)[0];
+        squares.splice(newIndex, 0, movedItem);
+        draggedIndex = newIndex;
+        // Rozkładamy na nowo
+        layoutSquares();
+        // Przeciągany kwadrat utrzymuje bieżącą pozycję
+        el.style.transform = `translateX(${newX}px)`;
+      } else {
+        // Aktualizujemy pozycje pozostałych
+        squares.forEach((sq, i) => {
+          if (i !== draggedIndex) {
+            sq.element.style.transform = `translateX(${sq.x}px)`;
+          }
+        });
+      }
+    }
+
+    function pointerUp(e) {
+      if (!isDragging) return;
+      const el = squares[draggedIndex].element;
+      el.classList.remove("dragging");
+      el.releasePointerCapture(e.pointerId);
+
+      document.removeEventListener("pointermove", pointerMove);
+      document.removeEventListener("pointerup", pointerUp);
+      isDragging = false;
+
+      layoutSquares();
+      checkWin();
+      checkHint();
+    }
+
+    /* ============================================
+       Sprawdzanie układu + podpowiedzi
+       ============================================ */
+    function getCurrentOrder() {
+      return squares.map(sq => sq.color);
+    }
+
+    function checkWin() {
+      const current = getCurrentOrder();
+      if (current.join() === targetOrder.join()) {
+        const elapsedTime = Math.floor((Date.now() - startTime) / 1000);
+        finalStats.textContent = `Czas: ${elapsedTime} s | Przeciągnięć: ${dragCount}`;
+        finalScreen.style.display = "flex";
+      }
+    }
+
+    // Dla każdego poprawnie ustawionego i:
+    //   - hint[i] = color (opacity=1.0)
+    //   - hint[i-1], hint[i+1] = color (opacity=0.3) TYLKO jeśli one same nie są poprawne
+    // Reszta - biała
+    function checkHint() {
+      const current = getCurrentOrder();
+      const hintEls = Array.from(hintContainer.children);
+
+      // Reset: wszystkie białe z pełną przezroczystością
+      hintEls.forEach(el => {
+        el.style.backgroundColor = "white";
+        el.style.opacity = "1.0";
+      });
+
+      let foundAny = false;
+
+      // Krok 1: zaznaczamy wszystkie faktycznie poprawne
+      for (let i = 0; i < targetOrder.length; i++) {
+        if (current[i] === targetOrder[i]) {
+          hintEls[i].style.backgroundColor = targetOrder[i];
+          hintEls[i].style.opacity = "1.0";
+          foundAny = true;
+        }
+      }
+
+      // Krok 2: sąsiedzi z opacity=0.3, ale tylko jeśli sami nie są poprawni
+      for (let i = 0; i < targetOrder.length; i++) {
+        if (current[i] === targetOrder[i]) {
+          // lewy sąsiad
+          if (i - 1 >= 0 && current[i - 1] !== targetOrder[i - 1]) {
+            hintEls[i - 1].style.backgroundColor = targetOrder[i - 1];
+            hintEls[i - 1].style.opacity = "0.3";
+          }
+          // prawy sąsiad
+          if (i + 1 < targetOrder.length && current[i + 1] !== targetOrder[i + 1]) {
+            hintEls[i + 1].style.backgroundColor = targetOrder[i + 1];
+            hintEls[i + 1].style.opacity = "0.3";
+          }
+        }
+      }
+
+      // Jeśli cokolwiek poprawnego – włączamy/utrwalamy widok podpowiedzi
+      if (foundAny || hintPermanentlyVisible) {
+        hintContainer.style.display = "flex";
+        hintPermanentlyVisible = true;
+      } else {
+        // Jeśli nadal nic poprawnego – chowamy
+        hintContainer.style.display = "none";
+      }
+    }
+
+    /* ============================================
+       Restart gry
+       ============================================ */
+    restartButton.addEventListener("click", () => {
+      finalScreen.style.display = "none";
+      initGame();
+    });
+
+    // Start gry
+    initGame();
+  </script>
+</body>
+</html>
